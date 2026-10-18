@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Study Timer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000; --card:#111; --card-lo:#0e0e0e; --digit:#b9b9b9; --label:#cfcfcf; --hint:#6b6b6b;
+  color-scheme: dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);overflow:hidden}
+body{
+  display:flex;align-items:center;justify-content:center;gap:3vw;
+  font-family:'Oswald','Arial Narrow','Impact',sans-serif;
+  user-select:none;-webkit-user-select:none;cursor:pointer;
+  padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);
+}
+body.idle{cursor:none}
+
+.card{
+  position:relative;
+  width:min(44vw,60vh);aspect-ratio:1/1.22;
+  container-type:size;perspective:1400px;
+  transition:opacity .5s ease;
+}
+body.paused .card{opacity:.55}
+
+.half,.leaf{position:absolute;left:0;right:0;height:50%;overflow:hidden;background:var(--card)}
+.top,.front{top:0;border-radius:4cqw 4cqw 0 0;background:linear-gradient(#141414,#101010)}
+.bottom,.back{bottom:0;border-radius:0 0 4cqw 4cqw;background:linear-gradient(#0f0f0f,#0b0b0b)}
+.half span,.leaf span{
+  position:absolute;left:0;right:0;height:200%;
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:80cqh;line-height:1;color:var(--digit);
+  letter-spacing:-.01em;font-variant-numeric:tabular-nums;
+}
+.top span,.front span{top:0;transform:translateY(-4cqh)}
+.bottom span,.back span{bottom:0;transform:translateY(4cqh)}
+/* the bottom half's span is 200% tall anchored to its bottom; shift keeps digit centred on the seam */
+.bottom span,.back span{transform:translateY(-4cqh)}
+
+.card::after{ /* the seam */
+  content:"";position:absolute;left:0;right:0;top:50%;height:.9cqh;min-height:2px;
+  transform:translateY(-50%);background:#000;z-index:6;
+}
+
+.leaf{display:none;backface-visibility:hidden;-webkit-backface-visibility:hidden;z-index:4}
+.front{transform-origin:50% 100%}
+.back{transform-origin:50% 0;transform:rotateX(90deg)}
+.flipping .leaf{display:block}
+.flipping .front{animation:fl-front .28s cubic-bezier(.5,0,1,.7) both}
+.flipping .back{animation:fl-back .3s cubic-bezier(.2,.6,.3,1) .28s both}
+@keyframes fl-front{from{transform:rotateX(0)}to{transform:rotateX(-90deg)}}
+@keyframes fl-back{from{transform:rotateX(90deg)}to{transform:rotateX(0)}}
+
+.label{
+  position:absolute;left:8cqw;top:10cqh;z-index:8;
+  font-size:7.5cqh;font-weight:700;letter-spacing:.02em;color:var(--label);
+}
+
+.hint{
+  position:fixed;left:0;right:0;bottom:calc(3.5vh + env(safe-area-inset-bottom,0px));
+  text-align:center;font-size:1.05rem;font-weight:600;letter-spacing:.18em;
+  color:var(--hint);opacity:0;transition:opacity .8s ease;pointer-events:none;
+}
+.hint.show{opacity:1}
+
+@media (max-aspect-ratio:1/1){
+  body{flex-direction:column;gap:3vh}
+  .card{width:min(80vw,34vh)}
+}
+</style>
+</head>
+<body class="paused">
+
+<div class="card" id="cm"><div class="label" id="hrs">0 HR</div></div>
+<div class="card" id="cs"></div>
+
+<div class="hint show" id="hint">SPACE · START / PAUSE &nbsp;&nbsp;&nbsp; R · RESET &nbsp;&nbsp;&nbsp; F · FULL SCREEN</div>
+
+<script>
+(function(){
+  function Card(el){
+    var label = el.firstElementChild;
+    el.insertAdjacentHTML('afterbegin',
+      '<div class="half top"><span>00</span></div>' +
+      '<div class="half bottom"><span>00</span></div>' +
+      '<div class="leaf front"><span>00</span></div>' +
+      '<div class="leaf back"><span>00</span></div>');
+    var tS = el.querySelector('.top span'),
+        bS = el.querySelector('.bottom span'),
+        fS = el.querySelector('.front span'),
+        kS = el.querySelector('.back span');
+    var cur = '00', timer;
+    this.set = function(v){
+      if(v === cur) return;
+      var old = cur; cur = v;
+      tS.textContent = v; fS.textContent = old; kS.textContent = v;
+      el.classList.remove('flipping'); void el.offsetWidth; el.classList.add('flipping');
+      clearTimeout(timer);
+      timer = setTimeout(function(){ bS.textContent = cur; el.classList.remove('flipping'); }, 620);
+    };
+    this.reset = function(){
+      cur = '00'; clearTimeout(timer); el.classList.remove('flipping');
+      tS.textContent = bS.textContent = fS.textContent = kS.textContent = '00';
+    };
+  }
+
+  var cm = new Card(document.getElementById('cm')),
+      cs = new Card(document.getElementById('cs')),
+      hrs = document.getElementById('hrs'),
+      hint = document.getElementById('hint'),
+      body = document.body;
+
+  var elapsed = 0, startedAt = 0, running = false, wake = null, hintT, idleT;
+  var pad = function(n){ return (n < 10 ? '0' : '') + n; };
+
+  function total(){ return elapsed + (running ? (performance.now() - startedAt) : 0); }
+
+  function render(){
+    var s = Math.floor(total() / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+    cm.set(pad(m)); cs.set(pad(sec));
+    hrs.textContent = h + ' HR';
+    document.title = (h ? h + ':' : '') + pad(m) + ':' + pad(sec) + ' · Study';
+  }
+
+  function showHint(){
+    hint.classList.add('show'); clearTimeout(hintT);
+    hintT = setTimeout(function(){ hint.classList.remove('show'); }, 3500);
+  }
+
+  async function lockScreen(){
+    try{ if('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){}
+  }
+  function unlockScreen(){ try{ if(wake){ wake.release(); wake = null; } }catch(e){} }
+
+  function toggle(){
+    if(running){
+      elapsed += performance.now() - startedAt; running = false;
+      body.classList.add('paused'); unlockScreen(); showHint();
+    }else{
+      startedAt = performance.now(); running = true;
+      body.classList.remove('paused'); lockScreen(); hint.classList.remove('show');
+    }
+    render();
+  }
+
+  function reset(){
+    if(running) return; // safety: only reset while paused
+    elapsed = 0; cm.reset(); cs.reset(); hrs.textContent = '0 HR';
+    document.title = 'Study Timer'; showHint();
+  }
+
+  function fullscreen(){
+    try{
+      if(document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }catch(e){}
+  }
+
+  document.addEventListener('keydown', function(e){
+    var k = e.key.toLowerCase();
+    if(k === ' ' || k === 'enter'){ e.preventDefault(); toggle(); }
+    else if(k === 'r'){ reset(); }
+    else if(k === 'f'){ fullscreen(); }
+  });
+  document.addEventListener('click', toggle);
+  document.addEventListener('visibilitychange', function(){ if(running && !document.hidden) lockScreen(); });
+
+  // hide cursor when idle
+  function wakeCursor(){
+    body.classList.remove('idle'); clearTimeout(idleT);
+    idleT = setTimeout(function(){ body.classList.add('idle'); }, 2000);
+  }
+  document.addEventListener('mousemove', wakeCursor); wakeCursor();
+
+  setInterval(function(){ if(running) render(); }, 200);
+  showHint();
+})();
+</script>
+</body>
+</html>
